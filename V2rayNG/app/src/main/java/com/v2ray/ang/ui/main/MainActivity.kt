@@ -93,9 +93,41 @@ class MainActivity : HelperBaseComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // ==== PurpleNG default subscription ====
+        val prefs = getSharedPreferences("PurpleNG", MODE_PRIVATE)
+        if (!prefs.getBoolean("first_run", false)) {
+            val subUrl = "https://parsabanafshi1.github.io/ParsaNG-Sub/config.txt"
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    AngConfigManager.importBatchConfig(subUrl, "PurpleNG", false)
+                    renameSubscription(subUrl, "Default Servers")
+                    prefs.edit().putBoolean("first_run", true).apply()
+                } catch (e: Exception) {
+                    LogUtil.e(AppConfig.TAG, "Failed to import PurpleNG subscription", e)
+                }
+            }
+        }
+        // ==== end PurpleNG default subscription ====
+
         mainViewModel.onAction(MainAction.Initialize)
 
         checkAndRequestPermission(PermissionType.POST_NOTIFICATIONS) {}
+    }
+
+    private fun renameSubscription(url: String, newName: String) {
+        try {
+            val subscriptions = MmkvManager.decodeSubscriptions()
+            subscriptions.forEach { cache ->
+                if (cache.subscription.url == url) {
+                    cache.subscription.remarks = newName
+                    MmkvManager.encodeSubscription(cache.guid, cache.subscription)
+                    return
+                }
+            }
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Failed to rename subscription", e)
+        }
     }
 
     override fun onStart() {

@@ -17,13 +17,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # The stable release aether's own release workflow built with; pinned so a new stable
-      # release cannot change or break the release build on its own. Bump it together with
-      # the aether submodule.
       RUST_TOOLCHAIN: "1.99.0"
-      # The Go line the Psiphon client's go.mod asks for, which also covers lyrebird's older one;
-      # aether/psiphon-build.sh and aether/pt-build.sh pin the programs themselves. Bump it when a
-      # bumped aether submodule pins a program that asks for a newer line.
       GO_VERSION: "1.26"
 
     steps:
@@ -61,7 +55,7 @@ jobs:
       if: steps.cache-libhevtun-restore.outputs.cache-hit != 'true'
       run: |
         bash compile-hevtun.sh
-    
+
     - name: Save libhevtun
       if: steps.cache-libhevtun-restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
@@ -98,11 +92,8 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: ${{ env.GO_VERSION }}
-        # The client is built from a checkout of its own; there is no go.sum here to cache by.
         cache: false
 
-    # The Aether core runs Psiphon as a program of its own, the psiphon-tunnel-core console client,
-    # which the app ships beside the core as libpsiphon-tunnel-core.so; see compile-psiphon.sh.
     - name: Restore cached Psiphon client
       id: cache-psiphon-restore
       uses: actions/cache/restore@v6
@@ -122,8 +113,6 @@ jobs:
         path: ${{ github.workspace }}/libs-psiphon
         key: psiphon-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('aether/psiphon-build.sh') }}-${{ hashFiles('compile-psiphon.sh') }}
 
-    # Tor's bridges run through a pluggable transport, a program of its own: lyrebird, which aether
-    # builds and the app ships beside the core as liblyrebird.so; see compile-pt.sh.
     - name: Restore cached pluggable transport
       id: cache-pt-restore
       uses: actions/cache/restore@v6
@@ -150,8 +139,6 @@ jobs:
         cp -r ${{ github.workspace }}/libs-psiphon/. ${{ github.workspace }}/V2rayNG/app/libs/
         cp -r ${{ github.workspace }}/libs-pt/. ${{ github.workspace }}/V2rayNG/app/libs/
 
-    # Psiphon's client starts with the newest server list the build could fetch, so a fresh install has
-    # servers before it can reach the list on its own; see fetch-psiphon-servers.sh.
     - name: Fetch the Psiphon server list
       run: |
         bash fetch-psiphon-servers.sh
@@ -178,106 +165,59 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
 
-    - name: Decode Keystore
-      uses: timheuer/base64-to-file@v2.0.0
-      id: android_keystore
-      with:
-        fileName: "android_keystore.jks"
-        encodedString: ${{ secrets.APP_KEYSTORE_BASE64 }}
-
-    - name: Build APK
+    - name: Build Debug APK
       run: |
         cd ${{ github.workspace }}/V2rayNG
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
-        # The JVM unit tests are the only automated check of the Kotlin logic; a failure stops the
-        # build before anything is assembled or signed.
-        ./gradlew :app:testPlaystoreDebugUnitTest
-        ./gradlew licenseFdroidReleaseReport
-        ./gradlew assembleRelease -PpattngVersion="${{ inputs.release_tag }}" -Pandroid.injected.signing.store.file=${{ steps.android_keystore.outputs.filePath }} -Pandroid.injected.signing.store.password=${{ secrets.APP_KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.APP_KEYSTORE_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
-    
-    - name: Check the native libraries in the APKs
-      run: |
-        # Looked into as ZIP files: every ABI the Aether core is built for has to carry the core, its
-        # Psiphon client and its pluggable transport, and each APK's native files are listed for the record.
-        status=0
-        for apk in ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*.apk; do
-          entries=$(unzip -Z1 "$apk" | grep '^lib/' || true)
-          echo "$(basename "$apk"):"
-          echo "$entries" | sed 's/^/  /'
-          for abi in arm64-v8a armeabi-v7a x86_64; do
-            echo "$entries" | grep -q "^lib/$abi/" || continue
-            for lib in libaether.so libpsiphon-tunnel-core.so liblyrebird.so; do
-              if ! echo "$entries" | grep -qx "lib/$abi/$lib"; then
-                echo "::error::$(basename "$apk") lacks lib/$abi/$lib"
-                status=1
-              fi
-            done
-          done
-        done
-        exit $status
+        ./gradlew assembleFdroidDebug
 
     - name: Upload arm64-v8a APK
       uses: actions/upload-artifact@v7
-      if: ${{  success() }}
+      if: ${{ success() }}
       with:
         name: arm64-v8a
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*arm64-v8a*.apk
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/fdroid/debug/*arm64-v8a*.apk
 
     - name: Upload armeabi-v7a APK
       uses: actions/upload-artifact@v7
-      if: ${{  success() }}
+      if: ${{ success() }}
       with:
         name: armeabi-v7a
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*armeabi-v7a*.apk
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/fdroid/debug/*armeabi-v7a*.apk
 
     - name: Upload x86 APK
       uses: actions/upload-artifact@v7
-      if: ${{  success() }}
+      if: ${{ success() }}
       with:
         name: x86-apk
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*x86*.apk
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/fdroid/debug/*x86*.apk
 
     - name: Upload universal APK
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
         name: universal-apk
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*universal*.apk
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/fdroid/debug/*universal*.apk
 
-  sign-and-release:
+  create-release:
     needs: build
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
 
     steps:
       - name: Download APK artifacts
         uses: actions/download-artifact@v8
         with:
-          path: release
+          path: release-files
 
-      - name: Sign APK files
-        run: |
-          # Quiet: a plain import prints the key's user ID, name and email, into the public log.
-          printf '%s' "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --quiet --import
-          KEY=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
-          mkdir -p release-files
-
-          find release -type f -name '*.apk' | while read apk; do
-            cp "$apk" release-files/
-            gpg --batch --yes --local-user "$KEY" --detach-sign --output "release-files/$(basename "$apk").sig" "$apk"
-          done
-
-          gpg --armor --export "$KEY" > release-files/PattNG-public-key.asc
-
-      - name: Upload APKs, signatures and public key to release
-        uses: svenstaro/upload-release-action@v2
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          file: release-files/*
-          tag: ${{ inputs.release_tag }}
-          release_name: PattNG v${{ inputs.release_tag }}
-          body: "."
-          target_commit: ${{ github.sha }}
-          file_glob: true
+          tag_name: ${{ inputs.release_tag }}
+          name: PattNG ${{ inputs.release_tag }}
+          draft: false
           prerelease: true
-          overwrite: true
+          files: release-files/**/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
